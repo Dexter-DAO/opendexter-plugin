@@ -1,0 +1,56 @@
+{
+  "name": "@dexterai/opendexter-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "OpenDexter plugin for OpenClaw — search, price-check, and pay for any x402 API with automatic USDC settlement across Solana, Base, Polygon, Arbitrum, Optimism, and Avalanche.",
+  "keywords": [
+    "openclaw",
+    "opendexter",
+    "x402",
+    "dexter",
+    "solana",
+    "base",
+    "evm",
+    "payments",
+    "usdc",
+    "marketplace",
+    "ai-agents",
+    "micropayments"
+  ],
+  "author": "Dexter AI <dev@dexter.cash>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dexter-DAO/opendexter-plugin"
+  },
+  "homepage": "https://dexter.cash/opendexter",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.4.5",
+      "pluginSdkVersion": "2026.4.5"
+    }
+  },
+  "dependencies": {
+    "@dexterai/x402": "^2.0.0",
+    "@sinclair/typebox": "^0.32.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "openclaw": "^2026.4.8"
+  }
+}

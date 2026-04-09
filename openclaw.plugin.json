@@ -1,0 +1,67 @@
+{
+  "id": "opendexter",
+  "name": "OpenDexter",
+  "description": "x402 marketplace access for OpenClaw agents. Search paid APIs, preview pricing, and auto-pay with USDC across Solana, Base, Polygon, Arbitrum, Optimism, and Avalanche.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "svmPrivateKey": {
+        "type": "string",
+        "description": "Solana wallet private key (base58) for USDC payments on Solana"
+      },
+      "evmPrivateKey": {
+        "type": "string",
+        "description": "EVM wallet private key (hex, with or without 0x) for USDC payments on Base, Polygon, Arbitrum, Optimism, Avalanche"
+      },
+      "defaultNetwork": {
+        "type": "string",
+        "enum": ["solana", "base", "polygon", "arbitrum", "optimism", "avalanche"],
+        "default": "solana",
+        "description": "Preferred payment network when an endpoint accepts multiple"
+      },
+      "maxPaymentUSDC": {
+        "type": "string",
+        "default": "0.50",
+        "description": "Maximum USDC to spend per API call (e.g. '0.50' = $0.50)"
+      },
+      "facilitatorUrl": {
+        "type": "string",
+        "default": "https://x402.dexter.cash",
+        "description": "x402 facilitator URL for payment settlement"
+      },
+      "marketplaceUrl": {
+        "type": "string",
+        "default": "https://x402.dexter.cash/api/facilitator/marketplace/resources",
+        "description": "OpenDexter marketplace API endpoint"
+      }
+    }
+  },
+  "uiHints": {
+    "svmPrivateKey": {
+      "label": "Solana Private Key",
+      "sensitive": true,
+      "help": "Base58-encoded Solana private key. Your agent uses this wallet to pay for x402 API calls on Solana."
+    },
+    "evmPrivateKey": {
+      "label": "EVM Private Key",
+      "sensitive": true,
+      "help": "Hex private key (0x...). Same key works on Base, Polygon, Arbitrum, Optimism, and Avalanche."
+    },
+    "maxPaymentUSDC": {
+      "label": "Max Payment Per Call (USDC)",
+      "help": "Safety limit. Rejects any single API call costing more than this amount."
+    },
+    "facilitatorUrl": {
+      "label": "Facilitator URL",
+      "advanced": true,
+      "help": "Override the x402 payment processor. Default: https://x402.dexter.cash"
+    },
+    "marketplaceUrl": {
+      "label": "Marketplace API URL",
+      "advanced": true,
+      "help": "Override the OpenDexter marketplace search endpoint."
+    }
+  },
+  "skills": ["skills"]
+}
