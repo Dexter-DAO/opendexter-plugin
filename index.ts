@@ -1,4 +1,3 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "@sinclair/typebox";
 import { wrapFetch, type WrapFetchOptions } from "@dexterai/x402/client";
 
@@ -151,13 +150,13 @@ function buildX402Fetch(config: PluginConfig): typeof fetch | null {
 // Plugin Entry
 // =============================================================================
 
-export default definePluginEntry({
+export default {
   id: "opendexter",
   name: "OpenDexter",
   description:
     "x402 marketplace access for OpenClaw agents. Search, price-check, and pay for paid APIs with USDC across Solana, Base, Polygon, Arbitrum, Optimism, and Avalanche.",
 
-  register(api) {
+  register(api: any) {
     const raw = (api.pluginConfig || {}) as PluginConfig;
 
     // Merge plugin config with environment variable fallbacks.
@@ -218,7 +217,7 @@ export default definePluginEntry({
         ),
       }),
 
-      async execute(_id, input) {
+      async execute(_id: string, input: any) {
         try {
           const result = await searchMarketplace(input.query, {
             network: input.network,
@@ -277,7 +276,7 @@ export default definePluginEntry({
         ),
       }),
 
-      async execute(_id, input) {
+      async execute(_id: string, input: any) {
         const url = input.url;
         const method = (input.method || "GET").toUpperCase();
 
@@ -554,7 +553,7 @@ export default definePluginEntry({
       description:
         "Call any x402-protected API with automatic USDC payment. Returns the API response and payment receipt.",
       parameters: fetchParams,
-      async execute(_id, input) {
+      async execute(_id: string, input: any) {
         return executeFetch(input);
       },
     });
@@ -565,7 +564,7 @@ export default definePluginEntry({
       description:
         "Alias for x402_fetch. Call any x402 API with automatic payment.",
       parameters: fetchParams,
-      async execute(_id, input) {
+      async execute(_id: string, input: any) {
         return executeFetch(input);
       },
     });
@@ -646,4 +645,4 @@ export default definePluginEntry({
       `  Marketplace: ${config.marketplaceUrl || DEFAULT_MARKETPLACE_URL}`
     );
   },
-});
+};
