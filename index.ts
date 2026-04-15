@@ -14,20 +14,35 @@ type PluginConfig = {
   marketplaceUrl?: string;
 };
 
-type MarketplaceResource = {
+/**
+ * Flat legacy-compatible shape for each result. Same field names the
+ * original `MarketplaceResource` exposed, plus new fields grafted on
+ * from the capability search response: `tier`, `similarity`, `why`,
+ * `score`, `gamingFlags`, `gamingSuspicious`.
+ */
+type FlatSearchResource = {
+  resourceId: string;
   name: string;
   url: string;
   method: string;
   price: string;
+  priceUsdc: number | null;
   network: string | null;
   description: string;
   category: string;
   qualityScore: number | null;
   verified: boolean;
+  verificationStatus: string;
   totalCalls: number;
-  totalVolume: string | null;
-  seller: string | null;
-  sellerReputation: number | null;
+  totalVolumeUsdc: number;
+  host: string | null;
+  iconUrl: string | null;
+  gamingFlags: string[];
+  gamingSuspicious: boolean;
+  tier: "strong" | "related";
+  similarity: number;
+  why: string;
+  score: number;
 };
 
 // =============================================================================
@@ -35,8 +50,15 @@ type MarketplaceResource = {
 // =============================================================================
 
 const DEFAULT_FACILITATOR_URL = "https://x402.dexter.cash";
-const DEFAULT_MARKETPLACE_URL =
-  "https://x402.dexter.cash/api/facilitator/marketplace/resources";
+/**
+ * Capability search endpoint — semantic vector search over the x402 corpus
+ * with synonym expansion, similarity floor, strong/related tiering, and
+ * cross-encoder LLM rerank. Replaces the legacy substring ranker at
+ * `/api/facilitator/marketplace/resources`, which was removed from
+ * dexter-api on 2026-04-15.
+ */
+const DEFAULT_CAPABILITY_URL =
+  "https://x402.dexter.cash/api/x402gle/capability";
 
 const NETWORK_TO_CAIP2: Record<string, string> = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
@@ -50,76 +72,155 @@ const NETWORK_TO_CAIP2: Record<string, string> = {
 };
 
 // =============================================================================
-// Marketplace Search
+// Capability Search
+//
+// Thin client over dexter-api's /api/x402gle/capability endpoint. The legacy
+// substring ranker at /api/facilitator/marketplace/resources was retired —
+// discovery now goes through a semantic vector search pipeline with synonym
+// expansion, similarity floor filtering, strong/related tiering, and a
+// cross-encoder LLM rerank on the top strong results.
+//
+// Emits a hybrid response shape: a flat `resources[]` array for OpenClaw
+// renderers that pattern-match legacy field names, plus full tiered
+// `strongResults`/`relatedResults` arrays with `tier`, `similarity`, and
+// `why` fields for agents that want the semantic signals.
 // =============================================================================
 
-async function searchMarketplace(
-  query?: string,
-  options?: {
-    network?: string;
-    verified?: boolean;
-    category?: string;
-    maxPriceUsdc?: number;
-    sort?: string;
-    limit?: number;
-    marketplaceUrl?: string;
-  }
-): Promise<{ resources: MarketplaceResource[]; total: number }> {
-  const baseUrl = options?.marketplaceUrl || DEFAULT_MARKETPLACE_URL;
-  const params = new URLSearchParams();
+interface CapabilityResult {
+  resourceId: string;
+  resourceUrl: string;
+  displayName: string | null;
+  description: string | null;
+  category: string | null;
+  host: string | null;
+  method: string;
+  icon: string | null;
+  pricing: { usdc: number | null; network: string | null; asset: string | null };
+  verification: {
+    status: string;
+    paid: boolean;
+    qualityScore: number | null;
+    lastVerifiedAt: string | null;
+  };
+  usage: {
+    totalSettlements: number;
+    totalVolumeUsdc: number;
+    lastSettlementAt: string | null;
+  };
+  gaming: { flags: string[]; suspicious: boolean };
+  score: number;
+  similarity: number;
+  why: string;
+  tier: "strong" | "related";
+}
 
-  if (query) params.set("search", query);
-  if (options?.network) params.set("network", options.network);
-  if (options?.verified) params.set("verified", "true");
-  if (options?.category) params.set("category", options.category);
-  if (options?.maxPriceUsdc != null)
-    params.set("maxPrice", String(options.maxPriceUsdc));
-  params.set("sort", options?.sort || "marketplace");
-  params.set("order", "desc");
-  params.set("limit", String(Math.min(options?.limit || 20, 50)));
+function formatPriceLabel(priceUsdc: number | null): string {
+  if (priceUsdc == null) return "price on request";
+  if (priceUsdc === 0) return "free";
+  if (priceUsdc < 0.01) return `$${priceUsdc.toFixed(4)}`;
+  return `$${priceUsdc.toFixed(2)}`;
+}
+
+function flattenResult(r: CapabilityResult): FlatSearchResource {
+  return {
+    resourceId: r.resourceId,
+    name: r.displayName ?? r.resourceUrl,
+    url: r.resourceUrl,
+    method: r.method || "GET",
+    price: formatPriceLabel(r.pricing.usdc),
+    priceUsdc: r.pricing.usdc,
+    network: r.pricing.network,
+    description: r.description ?? "",
+    category: r.category ?? "uncategorized",
+    qualityScore: r.verification.qualityScore,
+    verified: r.verification.status === "pass",
+    verificationStatus: r.verification.status,
+    totalCalls: r.usage.totalSettlements,
+    totalVolumeUsdc: r.usage.totalVolumeUsdc,
+    host: r.host,
+    iconUrl: r.icon,
+    gamingFlags: r.gaming.flags,
+    gamingSuspicious: r.gaming.suspicious,
+    tier: r.tier,
+    similarity: Math.round(r.similarity * 1000) / 1000,
+    why: r.why,
+    score: r.score,
+  };
+}
+
+async function capabilitySearch(
+  query: string,
+  options?: {
+    limit?: number;
+    unverified?: boolean;
+    testnets?: boolean;
+    rerank?: boolean;
+    endpoint?: string;
+  }
+): Promise<{
+  strongResults: FlatSearchResource[];
+  relatedResults: FlatSearchResource[];
+  resources: FlatSearchResource[];
+  strongCount: number;
+  relatedCount: number;
+  topSimilarity: number | null;
+  noMatchReason: "below_similarity_threshold" | "below_strong_threshold" | null;
+  rerank: { enabled: boolean; applied: boolean; reason?: string };
+  intent: { capabilityText: string; expandedCapabilityText?: string };
+}> {
+  const baseUrl = options?.endpoint || DEFAULT_CAPABILITY_URL;
+  const params = new URLSearchParams();
+  params.set("q", query);
+  params.set("limit", String(Math.min(Math.max(options?.limit ?? 20, 1), 50)));
+  if (options?.unverified) params.set("unverified", "true");
+  if (options?.testnets) params.set("testnets", "true");
+  if (options?.rerank === false) params.set("rerank", "false");
 
   const response = await fetch(`${baseUrl}?${params}`, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(20_000),
   });
-
   if (!response.ok) {
+    const body = await response.text().catch(() => "");
     throw new Error(
-      `Marketplace search failed: ${response.status} ${response.statusText}`
+      `Capability search failed: ${response.status} ${body.slice(0, 400)}`
     );
   }
 
   const data = (await response.json()) as {
     ok?: boolean;
-    resources?: Array<Record<string, unknown>>;
-    total?: number;
+    error?: string;
+    stage?: string;
+    strongResults: CapabilityResult[];
+    relatedResults: CapabilityResult[];
+    strongCount: number;
+    relatedCount: number;
+    topSimilarity: number | null;
+    noMatchReason: "below_similarity_threshold" | "below_strong_threshold" | null;
+    rerank: { enabled: boolean; applied: boolean; reason?: string };
+    intent: { capabilityText: string; expandedCapabilityText?: string };
   };
 
-  const resources = (data.resources || []).map(
-    (r: Record<string, unknown>) => ({
-      name: (r.displayName as string) || (r.resourceUrl as string),
-      url: r.resourceUrl as string,
-      method: (r.method as string) || "GET",
-      price:
-        (r.priceLabel as string) ||
-        (r.priceUsdc != null ? `$${Number(r.priceUsdc).toFixed(2)}` : "free"),
-      network: (r.priceNetwork as string) || null,
-      description: (r.description as string) || "",
-      category: (r.category as string) || "uncategorized",
-      qualityScore: (r.qualityScore as number) ?? null,
-      verified: r.verificationStatus === "pass",
-      totalCalls: (r.totalSettlements as number) ?? 0,
-      totalVolume:
-        r.totalVolumeUsdc != null
-          ? `$${Number(r.totalVolumeUsdc).toLocaleString()}`
-          : null,
-      seller:
-        ((r.seller as Record<string, unknown>)?.displayName as string) || null,
-      sellerReputation: (r.reputationScore as number) ?? null,
-    })
-  );
+  if (!data.ok) {
+    throw new Error(
+      `Capability search error${data.stage ? ` at stage ${data.stage}` : ""}: ${data.error ?? "unknown"}`
+    );
+  }
 
-  return { resources, total: data.total || resources.length };
+  const strong = (data.strongResults || []).map(flattenResult);
+  const related = (data.relatedResults || []).map(flattenResult);
+
+  return {
+    strongResults: strong,
+    relatedResults: related,
+    resources: [...strong, ...related],
+    strongCount: data.strongCount,
+    relatedCount: data.relatedCount,
+    topSimilarity: data.topSimilarity,
+    noMatchReason: data.noMatchReason,
+    rerank: data.rerank,
+    intent: data.intent,
+  };
 }
 
 // =============================================================================
@@ -183,51 +284,77 @@ export default {
     api.registerTool({
       name: "x402_search",
       description:
-        "Search the OpenDexter marketplace for paid APIs. Returns quality-ranked results with pricing, verification status, and seller reputation.",
+        "Semantic search over the OpenDexter x402 marketplace. Pass a natural-language query and get back two tiers: strong matches (high-confidence capability hits) and related matches (adjacent services that cleared the similarity floor). The ranker handles synonym expansion and alternate phrasings internally — just describe what you want. Use x402_fetch or x402_pay to call any result.",
       parameters: Type.Object({
-        query: Type.Optional(
-          Type.String({
-            description:
-              'Search query (e.g. "token analytics", "sentiment", "image generation")',
-          })
-        ),
-        network: Type.Optional(
-          Type.String({
-            description:
-              "Filter by network: solana, base, polygon, arbitrum, optimism, avalanche",
-          })
-        ),
-        verified: Type.Optional(
-          Type.Boolean({ description: "Only return quality-verified endpoints" })
-        ),
-        category: Type.Optional(
-          Type.String({ description: "Filter by category" })
-        ),
-        maxPriceUsdc: Type.Optional(
-          Type.Number({ description: "Maximum price per call in USDC" })
-        ),
-        sort: Type.Optional(
-          Type.String({
-            description:
-              "Sort: marketplace (default), relevance, quality_score, settlements, volume, recent",
-          })
-        ),
+        query: Type.String({
+          description:
+            'Natural-language description of the capability you want. e.g. "check wallet balance on Base", "generate an image", "ETH spot price feed". Do NOT pre-filter by chain or category — the search layer handles those semantically.',
+        }),
         limit: Type.Optional(
-          Type.Number({ description: "Max results (default 20, max 50)" })
+          Type.Number({
+            description:
+              "Max results across strong + related tiers combined (1-50, default 20)",
+          })
+        ),
+        unverified: Type.Optional(
+          Type.Boolean({
+            description: "Include unverified resources (default false)",
+          })
+        ),
+        testnets: Type.Optional(
+          Type.Boolean({
+            description: "Include testnet-only resources (default false)",
+          })
+        ),
+        rerank: Type.Optional(
+          Type.Boolean({
+            description:
+              "Cross-encoder LLM rerank of top strong results (default true). Set false for deterministic order or lowest-latency path.",
+          })
         ),
       }),
 
       async execute(_id: string, input: any) {
+        const query = typeof input.query === "string" ? input.query.trim() : "";
+        if (!query) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: false,
+                  error: "query is required",
+                }),
+              },
+            ],
+          };
+        }
+
         try {
-          const result = await searchMarketplace(input.query, {
-            network: input.network,
-            verified: input.verified,
-            category: input.category,
-            maxPriceUsdc: input.maxPriceUsdc,
-            sort: input.sort,
-            limit: Math.min(input.limit || 20, 50),
-            marketplaceUrl: config.marketplaceUrl,
+          const result = await capabilitySearch(query, {
+            limit: input.limit,
+            unverified: input.unverified,
+            testnets: input.testnets,
+            rerank: input.rerank,
+            endpoint: config.marketplaceUrl,
           });
+
+          const searchMeta = {
+            mode:
+              result.strongCount > 0
+                ? "direct"
+                : result.relatedCount > 0
+                  ? "related_only"
+                  : "empty",
+            reason: result.noMatchReason,
+          };
+
+          const tip =
+            result.strongCount > 0
+              ? "Use x402_fetch or x402_pay to call any of these endpoints. Strong matches are high-confidence; related matches are adjacent capabilities."
+              : result.relatedCount > 0
+                ? "No exact match. These are the closest related services — confirm with the user before calling."
+                : "Nothing in the index matches this query yet. Try a broader phrasing.";
 
           return {
             content: [
@@ -236,10 +363,19 @@ export default {
                 text: JSON.stringify(
                   {
                     success: true,
-                    total: result.total,
-                    showing: result.resources.length,
+                    count: result.resources.length,
                     resources: result.resources,
+                    strongResults: result.strongResults,
+                    relatedResults: result.relatedResults,
+                    strongCount: result.strongCount,
+                    relatedCount: result.relatedCount,
+                    topSimilarity: result.topSimilarity,
+                    noMatchReason: result.noMatchReason,
+                    rerank: result.rerank,
+                    intent: result.intent,
+                    searchMeta,
                     source: "OpenDexter (https://dexter.cash)",
+                    tip,
                   },
                   null,
                   2
@@ -642,7 +778,7 @@ export default {
       `  Wallet: ${config.svmPrivateKey || config.evmPrivateKey ? "configured" : "not configured"}`
     );
     api.logger.info(
-      `  Marketplace: ${config.marketplaceUrl || DEFAULT_MARKETPLACE_URL}`
+      `  Capability search: ${config.marketplaceUrl || DEFAULT_CAPABILITY_URL}`
     );
   },
 };

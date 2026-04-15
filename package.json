@@ -1,6 +1,6 @@
 {
   "name": "@dexterai/opendexter-plugin",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "description": "OpenDexter plugin for OpenClaw — search, price-check, and pay for any x402 API with automatic USDC settlement across Solana, Base, Polygon, Arbitrum, Optimism, and Avalanche.",
   "keywords": [
@@ -38,7 +38,7 @@
     }
   },
   "dependencies": {
-    "@dexterai/x402": "^2.0.0",
+    "@dexterai/x402": "^3.0.0",
     "@sinclair/typebox": "^0.32.0"
   },
   "peerDependencies": {
