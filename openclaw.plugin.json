@@ -2,6 +2,7 @@
   "id": "opendexter",
   "name": "OpenDexter",
   "description": "x402 marketplace access for OpenClaw agents. Search paid APIs, preview pricing, and auto-pay with USDC across Solana, Base, Polygon, Arbitrum, Optimism, and Avalanche.",
+  "version": "1.1.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
